@@ -36,10 +36,10 @@ import com.google.cloud.bigquery.StandardTableDefinition;
 import com.google.cloud.bigquery.TableConstraints;
 import com.google.cloud.bigquery.TableId;
 import com.google.cloud.bigquery.TableInfo;
+import com.google.cloud.bigquery.storage.v1.TableName;
 import com.wepay.kafka.connect.bigquery.config.BigQuerySinkConfig;
-import com.wepay.kafka.connect.bigquery.integration.utils.TableClearer;
 import com.wepay.kafka.connect.bigquery.retrieve.IdentitySchemaRetriever;
-import java.lang.reflect.Method;
+import com.wepay.kafka.connect.bigquery.utils.TableNameUtils;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -52,53 +52,58 @@ import org.apache.kafka.connect.json.JsonConverter;
 import org.apache.kafka.connect.json.JsonConverterConfig;
 import org.apache.kafka.connect.runtime.SinkConnectorConfig;
 import org.apache.kafka.connect.storage.Converter;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.TestInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 @Tag("integration")
-public class StorageWriteApiCdcBigQuerySinkConnectorIT extends BaseConnectorIT {
+class StorageWriteApiCdcBigQuerySinkConnectorIT extends BaseConnectorIT {
 
   private static final Logger logger =
       LoggerFactory.getLogger(StorageWriteApiCdcBigQuerySinkConnectorIT.class);
 
   private static final int TASKS_MAX = 1;
 
-  private String connectorName;
   private BigQuery bigQuery;
 
-  @BeforeEach
-  public void setup(TestInfo testInfo) {
-    String testMethod =
-        testInfo
-            .getTestMethod()
-            .map(Method::getName)
-            .orElseThrow(() -> new AssertionError("Test method not found"));
-    connectorName = "kcbq-cdc-sink-connector-" + testMethod;
-    bigQuery = newBigQuery();
+  @BeforeAll
+  static void beforeAll() {
     startConnect();
   }
 
-  @AfterEach
-  public void close() {
-    bigQuery = null;
+  @AfterAll
+  static void afterAll() {
     stopConnect();
   }
 
-  private void createTableWithPrimaryKey(String table, String... keyColumns) {
+  @BeforeEach
+  void setup() {
+    bigQuery = newBigQuery();
+  }
+
+  @AfterEach
+  void close() {
+    if (bigQuery != null) {
+      delete(bigQuery, tableName());
+    }
+    bigQuery = null;
+  }
+
+  private void createTableWithPrimaryKey(TableName tableName, String... keyColumns) {
     com.google.cloud.bigquery.Schema tableSchema =
         com.google.cloud.bigquery.Schema.of(
             Field.of("k1", StandardSQLTypeName.INT64), Field.of("f1", StandardSQLTypeName.STRING));
-    createTableWithPrimaryKey(table, tableSchema, keyColumns);
+    createTableWithPrimaryKey(tableName, tableSchema, keyColumns);
   }
 
   private void createTableWithPrimaryKey(
-      String table, com.google.cloud.bigquery.Schema tableSchema, String... keyColumns) {
-    TableId tableId = TableId.of(dataset(), table);
+      TableName tableName, com.google.cloud.bigquery.Schema tableSchema, String... keyColumns) {
+    TableId tableId = TableNameUtils.tableId(tableName);
 
     PrimaryKey primaryKey = PrimaryKey.newBuilder().setColumns(Arrays.asList(keyColumns)).build();
     TableConstraints constraints = TableConstraints.newBuilder().setPrimaryKey(primaryKey).build();
@@ -113,20 +118,20 @@ public class StorageWriteApiCdcBigQuerySinkConnectorIT extends BaseConnectorIT {
 
     try {
       bigQuery.create(tableInfo);
-      logger.info("Table {} with primary key constraints created successfully", table);
+      logger.info("Table {} with primary key constraints created successfully", tableId);
       bigQuery.query(
           com.google.cloud.bigquery.QueryJobConfiguration.of(
               String.format(
                   "ALTER TABLE `%s`.`%s` SET OPTIONS (max_staleness = INTERVAL 0 MINUTE)",
-                  dataset(), table)));
-      logger.info("Table {} max_staleness set to 0-0-0 successfully", table);
+                  tableName.getDataset(), tableName.getTable())));
+      logger.info("Table {} max_staleness set to 0-0-0 successfully", tableId);
       Thread.sleep(30000);
       logger.info("Waited 30 seconds for metadata propagation");
     } catch (BigQueryException ex) {
       if (!ex.getError().getReason().equalsIgnoreCase("duplicate")) {
         throw new ConnectException("Failed to create table: ", ex);
       } else {
-        logger.info("Table {} already exists", table);
+        logger.info("Table {} already exists", tableId);
       }
     } catch (InterruptedException ex) {
       Thread.currentThread().interrupt();
@@ -135,15 +140,13 @@ public class StorageWriteApiCdcBigQuerySinkConnectorIT extends BaseConnectorIT {
   }
 
   @Test
-  public void testStorageWriteApiNativeCdc() throws Throwable {
-    final String topic = suffixedTableOrTopic("test-storage-write-api-cdc");
-    connect.kafka().createTopic(topic, TASKS_MAX);
-
-    final String table = sanitizedTable(topic);
-    TableClearer.clearTables(bigQuery, dataset(), table);
+  void testStorageWriteApiNativeCdc() throws Throwable {
+    final String topic = topicName();
+    final TableName tableName = tableName();
+    assertCluster().kafka().createTopic(topic, TASKS_MAX);
 
     // Pre-create table with primary key 'k1'
-    createTableWithPrimaryKey(table, "k1");
+    createTableWithPrimaryKey(tableName, "k1");
 
     Map<String, String> props = baseConnectorProps(TASKS_MAX);
     props.put(SinkConnectorConfig.TOPICS_CONFIG, topic);
@@ -162,15 +165,15 @@ public class StorageWriteApiCdcBigQuerySinkConnectorIT extends BaseConnectorIT {
     props.put(VALUE_CONVERTER_CLASS_CONFIG, JsonConverter.class.getName());
 
     // start the sink connector
-    connect.configureConnector(connectorName, props);
-    waitForConnectorToStart(connectorName, TASKS_MAX);
+    assertCluster().configureConnector(connectorName(), props);
+    waitForConnectorToStart(connectorName(), TASKS_MAX);
 
     Converter keyConverter = converter(true);
     Converter valueConverter = converter(false);
 
     // Produce records:
     // 1. Insert record for key 1
-    connect
+    assertCluster()
         .kafka()
         .produce(
             topic,
@@ -178,13 +181,13 @@ public class StorageWriteApiCdcBigQuerySinkConnectorIT extends BaseConnectorIT {
             value(valueConverter, topic, "original value", false));
 
     // 2. Insert record for key 2
-    connect
+    assertCluster()
         .kafka()
         .produce(
             topic, key(keyConverter, topic, 2L), value(valueConverter, topic, "other row", false));
 
     // 3. Update record for key 1
-    connect
+    assertCluster()
         .kafka()
         .produce(
             topic,
@@ -192,18 +195,18 @@ public class StorageWriteApiCdcBigQuerySinkConnectorIT extends BaseConnectorIT {
             value(valueConverter, topic, "modified value", false));
 
     // 4. Delete record for key 1 (tombstone)
-    connect
+    assertCluster()
         .kafka()
         .produce(topic, key(keyConverter, topic, 1L), value(valueConverter, topic, null, true));
 
     // Wait for all 4 records to commit
-    waitForCommittedRecords(connectorName, topic, 4, TASKS_MAX);
+    waitForCommittedRecords(connectorName(), topic, 4, TASKS_MAX);
 
     // Read back rows from BigQuery, sorting by k1 column, waiting for merge to happen
     org.apache.kafka.test.TestUtils.waitForCondition(
         () -> {
           try {
-            return readAllRows(bigQuery, table, "k1").size() == 1;
+            return readAllRows(bigQuery, tableName, "k1").size() == 1;
           } catch (Exception e) {
             return false;
           }
@@ -211,7 +214,7 @@ public class StorageWriteApiCdcBigQuerySinkConnectorIT extends BaseConnectorIT {
         60000,
         "Timed out waiting for CDC table to merge and show 1 row");
 
-    List<List<Object>> allRows = readAllRows(bigQuery, table, "k1");
+    List<List<Object>> allRows = readAllRows(bigQuery, tableName, "k1");
 
     // The final result should contain only row 2, because key 1 was updated then deleted.
     // The query returns fields in order of table schema: k1, f1, _CHANGE_TYPE,
@@ -227,12 +230,10 @@ public class StorageWriteApiCdcBigQuerySinkConnectorIT extends BaseConnectorIT {
   }
 
   @Test
-  public void testStorageWriteApiCdcCompositeKey() throws Throwable {
-    final String topic = suffixedTableOrTopic("test-storage-write-api-cdc-composite");
-    connect.kafka().createTopic(topic, TASKS_MAX);
-
-    final String table = sanitizedTable(topic);
-    TableClearer.clearTables(bigQuery, dataset(), table);
+  void testStorageWriteApiCdcCompositeKey() throws Throwable {
+    final String topic = topicName();
+    final TableName tableName = tableName();
+    assertCluster().kafka().createTopic(topic, TASKS_MAX);
 
     // Pre-create table with composite primary key 'k1' and 'k2'
     com.google.cloud.bigquery.Schema tableSchema =
@@ -240,7 +241,7 @@ public class StorageWriteApiCdcBigQuerySinkConnectorIT extends BaseConnectorIT {
             Field.of("k1", StandardSQLTypeName.INT64),
             Field.of("k2", StandardSQLTypeName.STRING),
             Field.of("f1", StandardSQLTypeName.STRING));
-    createTableWithPrimaryKey(table, tableSchema, "k1", "k2");
+    createTableWithPrimaryKey(tableName, tableSchema, "k1", "k2");
 
     Map<String, String> props = baseConnectorProps(TASKS_MAX);
     props.put(SinkConnectorConfig.TOPICS_CONFIG, topic);
@@ -259,14 +260,14 @@ public class StorageWriteApiCdcBigQuerySinkConnectorIT extends BaseConnectorIT {
     props.put(VALUE_CONVERTER_CLASS_CONFIG, JsonConverter.class.getName());
 
     // start the sink connector
-    connect.configureConnector(connectorName, props);
-    waitForConnectorToStart(connectorName, TASKS_MAX);
+    assertCluster().configureConnector(connectorName(), props);
+    waitForConnectorToStart(connectorName(), TASKS_MAX);
 
     Converter keyConverter = converter(true);
     Converter valueConverter = converter(false);
 
     // 1. Insert record for key (1, "a") -> "original row 1"
-    connect
+    assertCluster()
         .kafka()
         .produce(
             topic,
@@ -274,7 +275,7 @@ public class StorageWriteApiCdcBigQuerySinkConnectorIT extends BaseConnectorIT {
             value(valueConverter, topic, "original row 1", false));
 
     // 2. Insert record for key (2, "b") -> "other row"
-    connect
+    assertCluster()
         .kafka()
         .produce(
             topic,
@@ -282,7 +283,7 @@ public class StorageWriteApiCdcBigQuerySinkConnectorIT extends BaseConnectorIT {
             value(valueConverter, topic, "other row", false));
 
     // 3. Update record for key (1, "a") -> "modified row 1"
-    connect
+    assertCluster()
         .kafka()
         .produce(
             topic,
@@ -290,7 +291,7 @@ public class StorageWriteApiCdcBigQuerySinkConnectorIT extends BaseConnectorIT {
             value(valueConverter, topic, "modified row 1", false));
 
     // 4. Delete record for key (1, "a") (Tombstone)
-    connect
+    assertCluster()
         .kafka()
         .produce(
             topic,
@@ -298,13 +299,13 @@ public class StorageWriteApiCdcBigQuerySinkConnectorIT extends BaseConnectorIT {
             value(valueConverter, topic, null, true));
 
     // Wait for all 4 records to be committed
-    waitForCommittedRecords(connectorName, topic, 4, TASKS_MAX);
+    waitForCommittedRecords(connectorName(), topic, 4, TASKS_MAX);
 
     // Read back rows from BigQuery, waiting for merge
     org.apache.kafka.test.TestUtils.waitForCondition(
         () -> {
           try {
-            return readAllRows(bigQuery, table, "k1").size() == 1;
+            return readAllRows(bigQuery, tableName, "k1").size() == 1;
           } catch (Exception e) {
             return false;
           }
@@ -312,7 +313,7 @@ public class StorageWriteApiCdcBigQuerySinkConnectorIT extends BaseConnectorIT {
         60000,
         "Timed out waiting for CDC table to merge and show 1 row");
 
-    List<List<Object>> allRows = readAllRows(bigQuery, table, "k1");
+    List<List<Object>> allRows = readAllRows(bigQuery, tableName, "k1");
 
     // The final result should contain only row 2, because key (1, "a") was updated then deleted.
     assertEquals(1, allRows.size());
@@ -326,7 +327,7 @@ public class StorageWriteApiCdcBigQuerySinkConnectorIT extends BaseConnectorIT {
         () -> {
           try {
             org.apache.kafka.connect.runtime.rest.entities.ConnectorStateInfo info =
-                connect.connectorStatus(connectorName);
+                assertCluster().connectorStatus(connectorName);
             return info != null && info.tasks().stream().anyMatch(s -> s.state().equals("FAILED"));
           } catch (Exception e) {
             return false;
@@ -337,15 +338,13 @@ public class StorageWriteApiCdcBigQuerySinkConnectorIT extends BaseConnectorIT {
   }
 
   @Test
-  public void testStorageWriteApiCdcDeleteDisabled() throws Throwable {
-    final String topic = suffixedTableOrTopic("test-storage-write-api-cdc-del-disabled");
-    connect.kafka().createTopic(topic, TASKS_MAX);
-
-    final String table = sanitizedTable(topic);
-    TableClearer.clearTables(bigQuery, dataset(), table);
+  void testStorageWriteApiCdcDeleteDisabled() throws Throwable {
+    final String topic = topicName();
+    final TableName tableName = tableName();
+    assertCluster().kafka().createTopic(topic, TASKS_MAX);
 
     // Pre-create table with primary key 'k1'
-    createTableWithPrimaryKey(table, "k1");
+    createTableWithPrimaryKey(tableName, "k1");
 
     Map<String, String> props = baseConnectorProps(TASKS_MAX);
     props.put(SinkConnectorConfig.TOPICS_CONFIG, topic);
@@ -364,14 +363,14 @@ public class StorageWriteApiCdcBigQuerySinkConnectorIT extends BaseConnectorIT {
     props.put(VALUE_CONVERTER_CLASS_CONFIG, JsonConverter.class.getName());
 
     // start the sink connector
-    connect.configureConnector(connectorName, props);
-    waitForConnectorToStart(connectorName, TASKS_MAX);
+    assertCluster().configureConnector(connectorName(), props);
+    waitForConnectorToStart(connectorName(), TASKS_MAX);
 
     Converter keyConverter = converter(true);
     Converter valueConverter = converter(false);
 
     // 1. Insert record for key 1
-    connect
+    assertCluster()
         .kafka()
         .produce(
             topic,
@@ -379,13 +378,13 @@ public class StorageWriteApiCdcBigQuerySinkConnectorIT extends BaseConnectorIT {
             value(valueConverter, topic, "original row 1", false));
 
     // 2. Produce tombstone for key 1 (should fail because delete is disabled)
-    connect.kafka().produce(topic, key(keyConverter, topic, 1L), null);
+    assertCluster().kafka().produce(topic, key(keyConverter, topic, 1L), null);
 
     // Wait for all 2 records to be committed (skipped records still have their offsets committed)
-    waitForCommittedRecords(connectorName, topic, 2, TASKS_MAX);
+    waitForCommittedRecords(connectorName(), topic, 2, TASKS_MAX);
 
     // Read back rows from BigQuery. The row should still exist because delete was disabled.
-    List<List<Object>> allRows = readAllRows(bigQuery, table, "k1");
+    List<List<Object>> allRows = readAllRows(bigQuery, tableName, "k1");
     assertEquals(1, allRows.size());
     assertEquals(1L, allRows.get(0).get(0));
     assertEquals("original row 1", allRows.get(0).get(1));
