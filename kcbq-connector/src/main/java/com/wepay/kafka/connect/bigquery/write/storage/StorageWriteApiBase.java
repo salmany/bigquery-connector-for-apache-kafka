@@ -319,7 +319,7 @@ public abstract class StorageWriteApiBase {
       String newId = ulidSupplier.get();
       List<ConvertedRecord> rebuilt = new ArrayList<>();
       for (ConvertedRecord item : batch) {
-        Map<String, Object> convertedMap = recordConverter.getRegularRow(item.original(), newId);
+        Map<String, Object> convertedMap = recordConverter.getRow(item.original(), newId);
         rebuilt.add(new ConvertedRecord(item.original(), getJsonFromMap(convertedMap)));
       }
       batch = rebuilt;

@@ -62,6 +62,7 @@ public final class SinkRecordConverter {
   private final long mergeRecordsThreshold;
   private final boolean useMessageTimeDatePartitioning;
   private final boolean usePartitionDecorator;
+  private final boolean isCdcEnabled;
 
   /**
    * Set by {@link com.wepay.kafka.connect.bigquery.BigQuerySinkTask#put} at the start of each put()
@@ -79,6 +80,7 @@ public final class SinkRecordConverter {
     this.mergeRecordsThreshold = config.getMergeThreshold();
     this.useMessageTimeDatePartitioning = config.useMessageTime();
     this.usePartitionDecorator = config.appendPartitionDecorator();
+    this.isCdcEnabled = config.isCdcEnabled();
   }
 
   /**
@@ -330,10 +332,27 @@ public final class SinkRecordConverter {
     return maybeSanitize(result);
   }
 
-  public boolean isCdcEnabled() {
-    boolean enabled = config.isCdcEnabled();
-    logger.trace("isCdcEnabled check - Result: {}", enabled);
-    return enabled;
+  /**
+   * Converts a SinkRecord to a CDC or regular row (depending on whether CDC is enabled) using the
+   * shared {@code currentPutAttemptId}.
+   *
+   * @param record the record to convert.
+   * @return the map of fields to values representing the row.
+   */
+  public Map<String, Object> getRow(SinkRecord record) {
+    return isCdcEnabled ? getCdcRow(record) : getRegularRow(record);
+  }
+
+  /**
+   * Converts a SinkRecord to a CDC or regular row (depending on whether CDC is enabled) using the
+   * specified writeAttemptId.
+   *
+   * @param record the record to convert.
+   * @param writeAttemptId the write attempt id to use.
+   * @return the map of fields to values representing the row.
+   */
+  public Map<String, Object> getRow(SinkRecord record, String writeAttemptId) {
+    return isCdcEnabled ? getCdcRow(record, writeAttemptId) : getRegularRow(record, writeAttemptId);
   }
 
   /**

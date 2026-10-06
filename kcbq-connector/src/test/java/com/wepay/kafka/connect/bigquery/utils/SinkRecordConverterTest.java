@@ -240,11 +240,28 @@ public class SinkRecordConverterTest {
   }
 
   @Test
-  public void testIsCdcEnabledWithoutUpsertOrDeleteFlags() {
-    when(config.isCdcEnabled()).thenReturn(true);
+  public void testGetRowDispatchesBasedOnCdcEnabled() {
+    SinkRecord record =
+        new SinkRecord(
+            TOPIC,
+            PARTITION,
+            keySchema,
+            keyStruct,
+            valueSchema,
+            valueStruct,
+            OFFSET,
+            RECORD_TIMESTAMP,
+            org.apache.kafka.common.record.TimestampType.CREATE_TIME);
 
-    SinkRecordConverter sinkRecordConverter = new SinkRecordConverter(config, null, null);
-    assertTrue(sinkRecordConverter.isCdcEnabled());
+    when(config.isCdcEnabled()).thenReturn(true);
+    SinkRecordConverter cdcConverter = new SinkRecordConverter(config, null, null);
+    Map<String, Object> cdcRow = cdcConverter.getRow(record);
+    assertEquals(CDC_CHANGE_TYPE_UPSERT, cdcRow.get(CDC_CHANGE_TYPE_FIELD));
+
+    when(config.isCdcEnabled()).thenReturn(false);
+    SinkRecordConverter regularConverter = new SinkRecordConverter(config, null, null);
+    Map<String, Object> regularRow = regularConverter.getRow(record);
+    assertFalse(regularRow.containsKey(CDC_CHANGE_TYPE_FIELD));
   }
 
   @Test

@@ -1565,7 +1565,9 @@ public class BigQuerySinkConfig extends AbstractConfig {
    * @return {@code true} if CDC is enabled with Storage Write API.
    */
   public boolean isCdcEnabled() {
-    return useStorageWriteApi() && isUpsertDeleteEnabled();
+    boolean enabled = useStorageWriteApi() && isUpsertDeleteEnabled();
+    logger.trace("isCdcEnabled check - Result: {}", enabled);
+    return enabled;
   }
 
   public boolean isUpsertDeleteEnabled() {
