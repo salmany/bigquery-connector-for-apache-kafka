@@ -883,6 +883,7 @@ public class BigQuerySinkConfig extends AbstractConfig {
     SinceInfo v2m8 = since.version("2.8.0").build().setVersionOnly();
     SinceInfo v2m10 = since.version("2.10.0").build().setVersionOnly();
     SinceInfo v2m15 = since.version("2.15.0").build().setVersionOnly();
+    SinceInfo v2m16 = since.version("2.16.0").build().setVersionOnly();
     return new ConfigDef()
         .define(
             TOPICS_CONFIG,
@@ -1066,24 +1067,30 @@ public class BigQuerySinkConfig extends AbstractConfig {
                     KAFKA_KEY_FIELD_NAME_CONFIG)
                 .build())
         .define(
-            TABLE_MAX_STALENESS_CONFIG,
-            TABLE_MAX_STALENESS_TYPE,
-            TABLE_MAX_STALENESS_DEFAULT,
-            TABLE_MAX_STALENESS_VALIDATOR,
-            TABLE_MAX_STALENESS_IMPORTANCE,
-            TABLE_MAX_STALENESS_DOC)
+            ExtendedConfigKey.builder(TABLE_MAX_STALENESS_CONFIG)
+                .type(TABLE_MAX_STALENESS_TYPE)
+                .defaultValue(TABLE_MAX_STALENESS_DEFAULT)
+                .validator(TABLE_MAX_STALENESS_VALIDATOR)
+                .importance(TABLE_MAX_STALENESS_IMPORTANCE)
+                .documentation(TABLE_MAX_STALENESS_DOC)
+                .since(v2m16)
+                .build())
         .define(
-            IS_CDC_ENABLED_CONFIG,
-            IS_CDC_ENABLED_TYPE,
-            IS_CDC_ENABLED_DEFAULT,
-            IS_CDC_ENABLED_IMPORTANCE,
-            IS_CDC_ENABLED_DOC)
+            ExtendedConfigKey.builder(IS_CDC_ENABLED_CONFIG)
+                .type(IS_CDC_ENABLED_TYPE)
+                .defaultValue(IS_CDC_ENABLED_DEFAULT)
+                .importance(IS_CDC_ENABLED_IMPORTANCE)
+                .documentation(IS_CDC_ENABLED_DOC)
+                .since(v2m16)
+                .build())
         .define(
-            CONFIG_PRESET_CONFIG,
-            CONFIG_PRESET_TYPE,
-            CONFIG_PRESET_DEFAULT,
-            CONFIG_PRESET_IMPORTANCE,
-            CONFIG_PRESET_DOC)
+            ExtendedConfigKey.builder(CONFIG_PRESET_CONFIG)
+                .type(CONFIG_PRESET_TYPE)
+                .defaultValue(CONFIG_PRESET_DEFAULT)
+                .importance(CONFIG_PRESET_IMPORTANCE)
+                .documentation(CONFIG_PRESET_DOC)
+                .since(v2m16)
+                .build())
         .define(
             INTERMEDIATE_TABLE_SUFFIX_CONFIG,
             INTERMEDIATE_TABLE_SUFFIX_TYPE,
