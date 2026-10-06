@@ -322,21 +322,6 @@ class StorageWriteApiCdcBigQuerySinkConnectorIT extends BaseConnectorIT {
     assertEquals("other row", allRows.get(0).get(2)); // f1
   }
 
-  private void waitForTaskToFail(String connectorName) throws InterruptedException {
-    org.apache.kafka.test.TestUtils.waitForCondition(
-        () -> {
-          try {
-            org.apache.kafka.connect.runtime.rest.entities.ConnectorStateInfo info =
-                assertCluster().connectorStatus(connectorName);
-            return info != null && info.tasks().stream().anyMatch(s -> s.state().equals("FAILED"));
-          } catch (Exception e) {
-            return false;
-          }
-        },
-        30000,
-        "Timed out waiting for connector task to fail");
-  }
-
   @Test
   void testStorageWriteApiCdcDeleteDisabled() throws Throwable {
     final String topic = topicName();

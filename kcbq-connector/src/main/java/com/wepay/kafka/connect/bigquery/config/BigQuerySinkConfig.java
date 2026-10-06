@@ -175,7 +175,9 @@ public class BigQuerySinkConfig extends AbstractConfig {
       ConfigDef.Importance.MEDIUM;
   private static final String TABLE_MAX_STALENESS_DOC =
       "The maximum staleness allowed for the destination BigQuery table in seconds. "
-          + "Only applicable if upsert/delete (CDC) is enabled with the Storage Write API.";
+          + "Only applicable if upsert/delete (CDC) is enabled with the Storage Write API. "
+          + "Checking and applying this option executes BigQuery SQL queries and requires "
+          + "bigquery.jobs.create permission in addition to Storage Write API permissions.";
   public static final String IS_CDC_ENABLED_CONFIG = "isCdcEnabled";
   public static final Boolean IS_CDC_ENABLED_DEFAULT = false;
   private static final ConfigDef.Type IS_CDC_ENABLED_TYPE = ConfigDef.Type.BOOLEAN;
@@ -512,7 +514,7 @@ public class BigQuerySinkConfig extends AbstractConfig {
   private static final ConfigDef.Importance USE_STORAGE_WRITE_API_IMPORTANCE =
       ConfigDef.Importance.MEDIUM;
   private static final String USE_STORAGE_WRITE_API_DOC =
-      "(Beta feature: use with caution) Use Google's New Storage Write API for data streaming. Not available for upsert/delete mode";
+      "(Beta feature: use with caution) Use Google's New Storage Write API for data streaming.";
   private static final ConfigDef.Type USE_CREDENTIALS_PROJECT_ID_TYPE = ConfigDef.Type.BOOLEAN;
   private static final ConfigDef.Importance USE_CREDENTIALS_PROJECT_ID_IMPORTANCE =
       ConfigDef.Importance.MEDIUM;
