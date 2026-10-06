@@ -1620,12 +1620,34 @@ public class SchemaManagerTest {
     }
   }
 
+  private com.google.cloud.bigquery.TableResult mockOptionValueResult(String optionValue) {
+    com.google.cloud.bigquery.TableResult result =
+        mock(com.google.cloud.bigquery.TableResult.class);
+    if (optionValue == null) {
+      when(result.iterateAll()).thenReturn(Collections.emptyList());
+    } else {
+      com.google.cloud.bigquery.FieldValue fieldValue =
+          mock(com.google.cloud.bigquery.FieldValue.class);
+      when(fieldValue.isNull()).thenReturn(false);
+      when(fieldValue.getStringValue()).thenReturn(optionValue);
+      com.google.cloud.bigquery.FieldValueList row =
+          mock(com.google.cloud.bigquery.FieldValueList.class);
+      when(row.get("option_value")).thenReturn(fieldValue);
+      when(result.iterateAll()).thenReturn(Collections.singletonList(row));
+    }
+    return result;
+  }
+
   @Test
   public void testCheckAndApplyTableOptions() throws Exception {
     int maxStalenessSeconds = 0;
     SchemaManagerTestConfig config =
         createConfig(
             Map.of(
+                BigQuerySinkConfig.USE_STORAGE_WRITE_API_CONFIG,
+                "true",
+                BigQuerySinkConfig.UPSERT_ENABLED_CONFIG,
+                "true",
                 BigQuerySinkConfig.TABLE_MAX_STALENESS_CONFIG,
                 Integer.toString(maxStalenessSeconds)));
     config.schemaConverter = mockSchemaConverter;
@@ -1634,15 +1656,14 @@ public class SchemaManagerTest {
     Table mockTable = mock(Table.class);
     when(mockBigQuery.getTable(tableId)).thenReturn(mockTable);
 
-    com.google.cloud.bigquery.TableResult mockResult =
-        mock(com.google.cloud.bigquery.TableResult.class);
+    com.google.cloud.bigquery.TableResult emptyResult = mockOptionValueResult(null);
     when(mockBigQuery.query(any(com.google.cloud.bigquery.QueryJobConfiguration.class)))
-        .thenReturn(mockResult);
+        .thenReturn(emptyResult);
 
-    // 1. First invocation: should execute the query
+    // 1. First invocation: should execute the SELECT and ALTER queries
     schemaManager.checkAndApplyTableOptions(tableId);
 
-    String expectedQuery =
+    String expectedAlterQuery =
         String.format(
             "ALTER TABLE `%s`.`%s` SET OPTIONS (max_staleness = INTERVAL %d SECOND)",
             tableId.getDataset(), tableId.getTable(), maxStalenessSeconds);
@@ -1650,7 +1671,10 @@ public class SchemaManagerTest {
     ArgumentCaptor<com.google.cloud.bigquery.QueryJobConfiguration> captor =
         ArgumentCaptor.forClass(com.google.cloud.bigquery.QueryJobConfiguration.class);
     verify(mockBigQuery, times(2)).query(captor.capture());
-    assertEquals(expectedQuery, captor.getValue().getQuery());
+    assertEquals(
+        com.google.cloud.bigquery.QueryParameterValue.string(tableId.getTable()),
+        captor.getAllValues().get(0).getNamedParameters().get("tableName"));
+    assertEquals(expectedAlterQuery, captor.getValue().getQuery());
 
     // Reset mock for next assertion
     org.mockito.Mockito.clearInvocations(mockBigQuery);
@@ -1663,12 +1687,16 @@ public class SchemaManagerTest {
   }
 
   @Test
-  public void testCheckAndApplyTableOptions_swallows409AndConcurrentConflict()
-      throws InterruptedException {
-    int maxStalenessSeconds = 60;
+  public void testCheckAndApplyTableOptions_skipsAlterWhenCanonicalIntervalMatches()
+      throws Exception {
+    int maxStalenessSeconds = 900; // 15 minutes -> "0-0 0 0:15:0"
     SchemaManagerTestConfig config =
         createConfig(
             Map.of(
+                BigQuerySinkConfig.USE_STORAGE_WRITE_API_CONFIG,
+                "true",
+                BigQuerySinkConfig.IS_CDC_ENABLED_CONFIG,
+                "true",
                 BigQuerySinkConfig.TABLE_MAX_STALENESS_CONFIG,
                 Integer.toString(maxStalenessSeconds)));
     config.schemaConverter = mockSchemaConverter;
@@ -1677,29 +1705,29 @@ public class SchemaManagerTest {
     Table mockTable = mock(Table.class);
     when(mockBigQuery.getTable(tableId)).thenReturn(mockTable);
 
-    com.google.cloud.bigquery.TableResult mockCheckResult =
-        mock(com.google.cloud.bigquery.TableResult.class);
-    when(mockCheckResult.iterateAll()).thenReturn(Collections.emptyList());
-
-    BigQueryException conflictException = mock(BigQueryException.class);
-    when(conflictException.getCode()).thenReturn(409);
-    when(conflictException.getMessage())
-        .thenReturn("Already Exists: Table option max_staleness already set");
-
+    com.google.cloud.bigquery.TableResult matchingResult = mockOptionValueResult("0-0 0 0:15:0");
     when(mockBigQuery.query(any(com.google.cloud.bigquery.QueryJobConfiguration.class)))
-        .thenReturn(mockCheckResult)
-        .thenThrow(conflictException);
+        .thenReturn(matchingResult);
 
-    assertDoesNotThrow(() -> schemaManager.checkAndApplyTableOptions(tableId));
+    schemaManager.checkAndApplyTableOptions(tableId);
+
+    // Only the INFORMATION_SCHEMA SELECT query should run; ALTER TABLE should be skipped
+    verify(mockBigQuery, times(1))
+        .query(any(com.google.cloud.bigquery.QueryJobConfiguration.class));
   }
 
   @Test
-  public void testCheckAndApplyTableOptions_swallowsConcurrentDdlConflictMessage()
-      throws InterruptedException {
-    int maxStalenessSeconds = 60;
+  public void testCheckAndApplyTableOptions_conflictThenMatchingValueReconciles() throws Exception {
+    int maxStalenessSeconds = 60; // 1 minute -> "0-0 0 0:1:0"
     SchemaManagerTestConfig config =
         createConfig(
             Map.of(
+                BigQuerySinkConfig.USE_STORAGE_WRITE_API_CONFIG,
+                "true",
+                BigQuerySinkConfig.UPSERT_ENABLED_CONFIG,
+                "true",
+                BigQuerySinkConfig.CONCURRENT_SCHEMA_UPDATE_MAX_RETRIES_CONFIG,
+                "2",
                 BigQuerySinkConfig.TABLE_MAX_STALENESS_CONFIG,
                 Integer.toString(maxStalenessSeconds)));
     config.schemaConverter = mockSchemaConverter;
@@ -1708,19 +1736,138 @@ public class SchemaManagerTest {
     Table mockTable = mock(Table.class);
     when(mockBigQuery.getTable(tableId)).thenReturn(mockTable);
 
-    com.google.cloud.bigquery.TableResult mockCheckResult =
-        mock(com.google.cloud.bigquery.TableResult.class);
-    when(mockCheckResult.iterateAll()).thenReturn(Collections.emptyList());
+    com.google.cloud.bigquery.TableResult initialEmptyResult = mockOptionValueResult(null);
+    com.google.cloud.bigquery.TableResult reconciledResult = mockOptionValueResult("0-0 0 0:1:0");
 
-    BigQueryException concurrentException = mock(BigQueryException.class);
-    when(concurrentException.getCode()).thenReturn(400);
-    when(concurrentException.getMessage()).thenReturn("concurrent update in progress on table");
+    BigQueryException conflictException =
+        new BigQueryException(
+            400,
+            "Could not serialize access to table testDataset.testTable due to concurrent update");
 
     when(mockBigQuery.query(any(com.google.cloud.bigquery.QueryJobConfiguration.class)))
-        .thenReturn(mockCheckResult)
-        .thenThrow(concurrentException);
+        .thenReturn(initialEmptyResult) // Attempt 0: SELECT -> not set
+        .thenThrow(conflictException) // Attempt 0: ALTER -> conflict
+        .thenReturn(reconciledResult); // Attempt 1: SELECT -> matches "0-0 0 0:1:0"!
 
     assertDoesNotThrow(() -> schemaManager.checkAndApplyTableOptions(tableId));
+    verify(mockBigQuery, times(3))
+        .query(any(com.google.cloud.bigquery.QueryJobConfiguration.class));
+  }
+
+  @Test
+  public void testCheckAndApplyTableOptions_conflictThenDifferentValueRetriesAlterAndSucceeds()
+      throws Exception {
+    int maxStalenessSeconds = 900; // 15 minutes -> "0-0 0 0:15:0"
+    SchemaManagerTestConfig config =
+        createConfig(
+            Map.of(
+                BigQuerySinkConfig.USE_STORAGE_WRITE_API_CONFIG,
+                "true",
+                BigQuerySinkConfig.UPSERT_ENABLED_CONFIG,
+                "true",
+                BigQuerySinkConfig.CONCURRENT_SCHEMA_UPDATE_MAX_RETRIES_CONFIG,
+                "2",
+                BigQuerySinkConfig.TABLE_MAX_STALENESS_CONFIG,
+                Integer.toString(maxStalenessSeconds)));
+    config.schemaConverter = mockSchemaConverter;
+    SchemaManager schemaManager = new SchemaManager(config, mockBigQuery);
+
+    Table mockTable = mock(Table.class);
+    when(mockBigQuery.getTable(tableId)).thenReturn(mockTable);
+
+    com.google.cloud.bigquery.TableResult initialEmptyResult = mockOptionValueResult(null);
+    com.google.cloud.bigquery.TableResult differentValueResult =
+        mockOptionValueResult("0-0 0 0:5:0"); // Another task set 300s instead of 900s
+    com.google.cloud.bigquery.TableResult alterSuccessResult = mockOptionValueResult(null);
+
+    BigQueryException rateLimitConflict =
+        new BigQueryException(
+            400,
+            "Exceeded rate limits: too many table update operations for this table. "
+                + "For more information, see https://docs.cloud.google.com/bigquery/troubleshooting-errors");
+
+    when(mockBigQuery.query(any(com.google.cloud.bigquery.QueryJobConfiguration.class)))
+        .thenReturn(initialEmptyResult) // Attempt 0: SELECT -> not set
+        .thenThrow(rateLimitConflict) // Attempt 0: ALTER -> conflict
+        .thenReturn(differentValueResult) // Attempt 1: SELECT -> 300s != 900s
+        .thenReturn(alterSuccessResult); // Attempt 1: ALTER -> succeeds
+
+    assertDoesNotThrow(() -> schemaManager.checkAndApplyTableOptions(tableId));
+    verify(mockBigQuery, times(4))
+        .query(any(com.google.cloud.bigquery.QueryJobConfiguration.class));
+  }
+
+  @Test
+  public void testCheckAndApplyTableOptions_conflictExhaustsRetriesThrowsConnectException()
+      throws Exception {
+    int maxStalenessSeconds = 60;
+    SchemaManagerTestConfig config =
+        createConfig(
+            Map.of(
+                BigQuerySinkConfig.USE_STORAGE_WRITE_API_CONFIG,
+                "true",
+                BigQuerySinkConfig.UPSERT_ENABLED_CONFIG,
+                "true",
+                BigQuerySinkConfig.CONCURRENT_SCHEMA_UPDATE_MAX_RETRIES_CONFIG,
+                "1",
+                BigQuerySinkConfig.TABLE_MAX_STALENESS_CONFIG,
+                Integer.toString(maxStalenessSeconds)));
+    config.schemaConverter = mockSchemaConverter;
+    SchemaManager schemaManager = new SchemaManager(config, mockBigQuery);
+
+    Table mockTable = mock(Table.class);
+    when(mockBigQuery.getTable(tableId)).thenReturn(mockTable);
+
+    com.google.cloud.bigquery.TableResult differentValueResult =
+        mockOptionValueResult("0-0 0 0:5:0");
+    BigQueryException conflictException =
+        new BigQueryException(409, "Concurrent update conflict on table");
+
+    when(mockBigQuery.query(any(com.google.cloud.bigquery.QueryJobConfiguration.class)))
+        .thenReturn(differentValueResult) // Attempt 0: SELECT -> 300s != 60s
+        .thenThrow(conflictException) // Attempt 0: ALTER -> 409
+        .thenReturn(differentValueResult) // Attempt 1: SELECT -> 300s != 60s
+        .thenThrow(conflictException); // Attempt 1: ALTER -> 409
+
+    assertThrows(
+        BigQueryConnectException.class, () -> schemaManager.checkAndApplyTableOptions(tableId));
+    verify(mockBigQuery, times(4))
+        .query(any(com.google.cloud.bigquery.QueryJobConfiguration.class));
+  }
+
+  @Test
+  public void testCheckAndApplyTableOptions_skippedWhenCdcDisabled() throws Exception {
+    SchemaManagerTestConfig config =
+        createConfig(
+            Map.of(
+                BigQuerySinkConfig.USE_STORAGE_WRITE_API_CONFIG,
+                "true",
+                BigQuerySinkConfig.UPSERT_ENABLED_CONFIG,
+                "false",
+                BigQuerySinkConfig.DELETE_ENABLED_CONFIG,
+                "false",
+                BigQuerySinkConfig.IS_CDC_ENABLED_CONFIG,
+                "false",
+                BigQuerySinkConfig.TABLE_MAX_STALENESS_CONFIG,
+                "60"));
+    config.schemaConverter = mockSchemaConverter;
+    SchemaManager schemaManager = new SchemaManager(config, mockBigQuery);
+
+    schemaManager.checkAndApplyTableOptions(tableId);
+    verify(mockBigQuery, org.mockito.Mockito.never())
+        .query(any(com.google.cloud.bigquery.QueryJobConfiguration.class));
+  }
+
+  @Test
+  public void testParseIntervalToSeconds() {
+    assertEquals(Optional.of(0L), SchemaManager.parseIntervalToSeconds("0-0 0 0:0:0"));
+    assertEquals(Optional.of(900L), SchemaManager.parseIntervalToSeconds("0-0 0 0:15:0"));
+    assertEquals(Optional.of(36000L), SchemaManager.parseIntervalToSeconds("0-0 0 10:0:0"));
+    assertEquals(Optional.of(90061L), SchemaManager.parseIntervalToSeconds("0-0 1 1:1:1"));
+    assertEquals(Optional.of(900L), SchemaManager.parseIntervalToSeconds("INTERVAL 900 SECOND"));
+    assertEquals(Optional.empty(), SchemaManager.parseIntervalToSeconds("1-0 0 0:0:0"));
+    assertEquals(Optional.empty(), SchemaManager.parseIntervalToSeconds("invalid"));
+    assertEquals(Optional.empty(), SchemaManager.parseIntervalToSeconds(null));
   }
 
   @Test
