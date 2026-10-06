@@ -479,6 +479,38 @@ public class BigQuerySinkConfigTest {
   }
 
   @Test
+  void testKafkaKeyFieldWithIsCdcEnabledAndStorageWriteApi() {
+    Map<String, String> configProperties = propertiesFactory.getProperties();
+    configProperties.put(BigQuerySinkConfig.KAFKA_KEY_FIELD_NAME_CONFIG, "KeyField");
+    configProperties.put(BigQuerySinkConfig.IS_CDC_ENABLED_CONFIG, "true");
+    configProperties.put(BigQuerySinkConfig.USE_STORAGE_WRITE_API_CONFIG, "true");
+
+    BigQuerySinkConfig config = new BigQuerySinkConfig(configProperties);
+    Map<String, ConfigValue> errors = errorMap(config.validate());
+    assertThat(errors.keySet())
+        .containsExactlyInAnyOrder(
+            BigQuerySinkConfig.KAFKA_KEY_FIELD_NAME_CONFIG,
+            BigQuerySinkConfig.GCS_BUCKET_NAME_CONFIG,
+            "keyfile");
+  }
+
+  @Test
+  void testKafkaKeyFieldWithConfigPresetAndStorageWriteApi() {
+    Map<String, String> configProperties = propertiesFactory.getProperties();
+    configProperties.put(BigQuerySinkConfig.KAFKA_KEY_FIELD_NAME_CONFIG, "KeyField");
+    configProperties.put(BigQuerySinkConfig.CONFIG_PRESET_CONFIG, "debezium_cdc");
+    configProperties.put(BigQuerySinkConfig.USE_STORAGE_WRITE_API_CONFIG, "true");
+
+    BigQuerySinkConfig config = new BigQuerySinkConfig(configProperties);
+    Map<String, ConfigValue> errors = errorMap(config.validate());
+    assertThat(errors.keySet())
+        .containsExactlyInAnyOrder(
+            BigQuerySinkConfig.KAFKA_KEY_FIELD_NAME_CONFIG,
+            BigQuerySinkConfig.GCS_BUCKET_NAME_CONFIG,
+            "keyfile");
+  }
+
+  @Test
   void testGetKafkaKeyFieldName_autoFallbackForStorageWriteApiCdc() {
     Map<String, String> configProperties = propertiesFactory.getProperties();
     configProperties.put(BigQuerySinkConfig.USE_STORAGE_WRITE_API_CONFIG, "true");
@@ -493,13 +525,14 @@ public class BigQuerySinkConfigTest {
     config = new BigQuerySinkConfig(configProperties);
     assertEquals(Optional.of(""), config.getKafkaKeyFieldName());
 
-    // Custom non-empty field name with CDC -> auto-fallbacks to ""
-    configProperties.put(BigQuerySinkConfig.KAFKA_KEY_FIELD_NAME_CONFIG, "customKey");
+    // Blank string -> returns ""
+    configProperties.put(BigQuerySinkConfig.KAFKA_KEY_FIELD_NAME_CONFIG, "   ");
     config = new BigQuerySinkConfig(configProperties);
     assertEquals(Optional.of(""), config.getKafkaKeyFieldName());
 
     // Non-CDC mode with custom field name -> preserves customKey
     configProperties.put(BigQuerySinkConfig.UPSERT_ENABLED_CONFIG, "false");
+    configProperties.put(BigQuerySinkConfig.KAFKA_KEY_FIELD_NAME_CONFIG, "customKey");
     config = new BigQuerySinkConfig(configProperties);
     assertEquals(Optional.of("customKey"), config.getKafkaKeyFieldName());
 

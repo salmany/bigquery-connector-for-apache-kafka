@@ -55,6 +55,7 @@ import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.kafka.common.config.AbstractConfig;
 import org.apache.kafka.common.config.Config;
 import org.apache.kafka.common.config.ConfigDef;
@@ -1517,19 +1518,11 @@ public class BigQuerySinkConfig extends AbstractConfig {
    * @return Field name of Kafka Key to be used in BigQuery
    */
   public Optional<String> getKafkaKeyFieldName() {
-    if (isCdcEnabled()) {
-      String value = getString(KAFKA_KEY_FIELD_NAME_CONFIG);
-      if (value != null && !value.trim().isEmpty()) {
-        logger.warn(
-            "{} is configured as '{}', but it will be ignored because CDC upsert/delete with "
-                + "Storage Write API requires Kafka keys to be flattened into root schema columns "
-                + "for BigQuery primary keys.",
-            KAFKA_KEY_FIELD_NAME_CONFIG,
-            value);
-      }
-      return Optional.of("");
+    String value = getString(KAFKA_KEY_FIELD_NAME_CONFIG);
+    if (StringUtils.isBlank(value) && isCdcEnabled()) {
+      value = "";
     }
-    return Optional.ofNullable(getString(KAFKA_KEY_FIELD_NAME_CONFIG));
+    return Optional.ofNullable(value);
   }
 
   /**
