@@ -399,8 +399,8 @@ public class BigQuerySinkConfigTest {
         .containsExactlyInAnyOrder(
             BigQuerySinkConfig.KAFKA_KEY_FIELD_NAME_CONFIG,
             BigQuerySinkConfig.GCS_BUCKET_NAME_CONFIG,
-            BigQuerySinkConfig.DELETE_ENABLED_CONFIG,
-            "keyfile");
+            "keyfile",
+            BigQuerySinkConfig.DELETE_ENABLED_CONFIG);
   }
 
   @Test
