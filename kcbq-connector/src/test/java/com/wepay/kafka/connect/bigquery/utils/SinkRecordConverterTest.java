@@ -398,7 +398,7 @@ public class SinkRecordConverterTest {
     Map<String, Object> actual = sinkRecordConverter.getCdcRow(record);
 
     assertEquals("UPSERT", actual.get("_CHANGE_TYPE"));
-    String expectedAliceHex = String.format("%64s", "416C696365").replace(' ', '0');
+    String expectedAliceHex = "0000000000000000/0000000000000000/0000000000000000/000000416C696365";
     assertEquals(
         String.format("%s/%016X/%016X/%08X", expectedAliceHex, RECORD_TIMESTAMP, OFFSET, PARTITION),
         actual.get("_CHANGE_SEQUENCE_NUMBER"));
@@ -855,11 +855,16 @@ public class SinkRecordConverterTest {
     String seq1 = (String) converter.getCdcRow(record1).get("_CHANGE_SEQUENCE_NUMBER");
     String seq2 = (String) converter.getCdcRow(record2).get("_CHANGE_SEQUENCE_NUMBER");
 
-    // Both should have their custom segment zero-padded to at least 64 chars
+    // Both should have their custom sequence split into 4 zero-padded 16-hex-char segments
+    // (7 segments total including timestamp/offset/partition, each <= 16 hex chars)
     String[] parts1 = seq1.split("/");
     String[] parts2 = seq2.split("/");
-    assertEquals(64, parts1[0].length());
-    assertEquals(64, parts2[0].length());
+    assertEquals(7, parts1.length);
+    assertEquals(7, parts2.length);
+    for (int i = 0; i < 4; i++) {
+      assertEquals(16, parts1[i].length());
+      assertEquals(16, parts2[i].length());
+    }
     assertTrue(seq2.compareTo(seq1) > 0);
   }
 

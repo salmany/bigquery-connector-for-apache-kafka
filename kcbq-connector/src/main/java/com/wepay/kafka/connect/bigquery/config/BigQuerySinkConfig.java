@@ -168,7 +168,7 @@ public class BigQuerySinkConfig extends AbstractConfig {
       ConfigDef.Importance.MEDIUM;
   private static final String CDC_CHANGE_SEQUENCE_NUMBER_FIELD_DOC =
       "The name of the field or header to use as the change sequence number (_CHANGE_SEQUENCE_NUMBER) for BigQuery CDC. "
-          + "If not set, Kafka Offset is used as the default sequence number.";
+          + "If not set, a composite sequence derived from the Kafka record timestamp, offset, and partition is used.";
   public static final String TABLE_MAX_STALENESS_CONFIG = "tableMaxStaleness";
   public static final Integer TABLE_MAX_STALENESS_DEFAULT = null;
   private static final ConfigDef.Type TABLE_MAX_STALENESS_TYPE = ConfigDef.Type.INT;
@@ -1079,11 +1079,13 @@ public class BigQuerySinkConfig extends AbstractConfig {
                     KAFKA_KEY_FIELD_NAME_CONFIG)
                 .build())
         .define(
-            CDC_CHANGE_SEQUENCE_NUMBER_FIELD_CONFIG,
-            CDC_CHANGE_SEQUENCE_NUMBER_FIELD_TYPE,
-            CDC_CHANGE_SEQUENCE_NUMBER_FIELD_DEFAULT,
-            CDC_CHANGE_SEQUENCE_NUMBER_FIELD_IMPORTANCE,
-            CDC_CHANGE_SEQUENCE_NUMBER_FIELD_DOC)
+            ExtendedConfigKey.builder(CDC_CHANGE_SEQUENCE_NUMBER_FIELD_CONFIG)
+                .type(CDC_CHANGE_SEQUENCE_NUMBER_FIELD_TYPE)
+                .defaultValue(CDC_CHANGE_SEQUENCE_NUMBER_FIELD_DEFAULT)
+                .importance(CDC_CHANGE_SEQUENCE_NUMBER_FIELD_IMPORTANCE)
+                .documentation(CDC_CHANGE_SEQUENCE_NUMBER_FIELD_DOC)
+                .since(v2m16)
+                .build())
         .define(
             ExtendedConfigKey.builder(TABLE_MAX_STALENESS_CONFIG)
                 .type(TABLE_MAX_STALENESS_TYPE)
